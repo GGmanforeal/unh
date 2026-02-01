@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>V-STREAM | Mobile</title>
+    <title>V-STREAM | Mobile Fix</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <script type="module">
@@ -24,19 +24,22 @@
         window.onload = async () => {
             lucide.createIcons();
             
-            // Auth with retry logic for mobile networks
             try {
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                     await signInWithCustomToken(auth, __initial_auth_token);
                 } else {
                     await signInAnonymously(auth);
                 }
-            } catch (e) { console.error("Auth failed", e); }
+            } catch (e) { 
+                console.error("Auth failed", e);
+                showStatus("Connection Error. Try refreshing.");
+            }
 
             onAuthStateChanged(auth, (user) => {
                 currentUser = user;
                 if (user) {
-                    document.getElementById('userAvatar').innerText = user.uid[0].toUpperCase();
+                    const avatar = document.getElementById('userAvatar');
+                    if (avatar) avatar.innerText = user.uid[0].toUpperCase();
                     subscribeToVideos();
                 }
             });
@@ -47,16 +50,18 @@
             onSnapshot(vCol, (snapshot) => {
                 videos = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
                 renderVideos();
+            }, (error) => {
+                console.error("Cloud Sync Error:", error);
             });
         }
 
-        window.setCategory = (cat) => {
+        window.setCategory = (event, cat) => {
             activeCategory = cat;
             document.querySelectorAll('.cat-btn').forEach(b => {
                 b.classList.remove('bg-indigo-600', 'text-white');
                 b.classList.add('bg-white/5', 'text-gray-400');
             });
-            event.target.classList.add('bg-indigo-600', 'text-white');
+            event.currentTarget.classList.add('bg-indigo-600', 'text-white');
             renderVideos();
         };
 
@@ -64,17 +69,22 @@
             const grid = document.getElementById('videoGrid');
             const filtered = videos.filter(v => activeCategory === "All" || v.category === activeCategory);
             
+            if (filtered.length === 0) {
+                grid.innerHTML = `<div class="py-20 text-center text-gray-600 text-sm">No videos found.</div>`;
+                return;
+            }
+
             grid.innerHTML = filtered.map(v => `
-                <div onclick="window.playVideo('${v.id}')" class="bg-white/5 rounded-2xl overflow-hidden active:scale-[0.98] transition-transform">
+                <div onclick="window.playVideo('${v.id}')" class="bg-white/5 rounded-2xl overflow-hidden active:scale-[0.98] transition-transform border border-white/5">
                     <div class="aspect-video relative">
-                        <img src="${v.thumbnail}" class="w-full h-full object-cover">
-                        <div class="absolute inset-0 flex items-center justify-center">
-                            <div class="bg-black/40 backdrop-blur-sm p-3 rounded-full"><i data-lucide="play" fill="white" class="text-white w-6 h-6"></i></div>
+                        <img src="${v.thumbnail}" class="w-full h-full object-cover" loading="lazy">
+                        <div class="absolute inset-0 flex items-center justify-center bg-black/10">
+                            <div class="bg-black/40 backdrop-blur-sm p-3 rounded-full border border-white/10"><i data-lucide="play" fill="white" class="text-white w-6 h-6"></i></div>
                         </div>
                     </div>
                     <div class="p-3">
                         <h3 class="font-bold text-sm line-clamp-2">${v.title}</h3>
-                        <p class="text-xs text-gray-500 mt-1">${v.uploader} • ${v.views || 0} views</p>
+                        <p class="text-[10px] text-gray-500 mt-1 uppercase tracking-wider font-semibold">${v.uploader} • ${v.views || 0} views</p>
                     </div>
                 </div>
             `).join('');
@@ -83,17 +93,24 @@
 
         window.playVideo = (id) => {
             const v = videos.find(x => x.id === id);
+            if (!v) return;
+
             document.getElementById('homeView').classList.add('hidden');
             document.getElementById('playerView').classList.remove('hidden');
             window.scrollTo(0,0);
 
             const container = document.getElementById('playerContainer');
+            
+            // Handle local file blobs if they exist in current session, otherwise use the URL
             container.innerHTML = v.isEmbed ? 
-                `<iframe src="${v.url}" class="w-full h-full" allowfullscreen></iframe>` :
-                `<video src="${v.url}" controls autoplay class="w-full h-full"></video>`;
+                `<iframe src="${v.url}" class="w-full h-full" allowfullscreen frameborder="0"></iframe>` :
+                `<video src="${v.url}" controls autoplay class="w-full h-full bg-black"></video>`;
             
             document.getElementById('pTitle').innerText = v.title;
-            updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'videos', id), { views: (v.views || 0) + 1 });
+            
+            updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'videos', id), { 
+                views: (v.views || 0) + 1 
+            });
         };
 
         window.goHome = () => {
@@ -104,120 +121,221 @@
 
         window.handleUpload = async (e) => {
             e.preventDefault();
-            const btn = e.target.querySelector('button[type="submit"]');
-            btn.disabled = true;
-            btn.innerText = "Publishing...";
+            if (!currentUser) {
+                showStatus("Please wait for connection...");
+                return;
+            }
 
-            const urlInput = e.target.url.value;
-            const iframeMatch = urlInput.match(/src=["'](.*?)["']/);
-            let finalUrl = iframeMatch ? iframeMatch[1] : urlInput;
+            const form = e.target;
+            const btn = form.querySelector('button[type="submit"]');
+            const fileInput = document.getElementById('fileUpload');
+            const originalText = btn.innerText;
+            
+            btn.disabled = true;
+            btn.innerText = "Processing...";
+
+            let finalUrl = "";
+            let isEmbed = true;
+
+            // Check if user picked a file first
+            if (fileInput.files.length > 0) {
+                const file = fileInput.files[0];
+                finalUrl = URL.createObjectURL(file);
+                isEmbed = false;
+            } else {
+                const urlInput = form.url.value;
+                const iframeMatch = urlInput.match(/src=["'](.*?)["']/);
+                finalUrl = iframeMatch ? iframeMatch[1] : urlInput.trim();
+            }
+
+            if (!finalUrl) {
+                showStatus("Please provide a link or a file.");
+                btn.disabled = false;
+                btn.innerText = originalText;
+                return;
+            }
 
             try {
                 await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'videos'), {
-                    title: e.target.title.value || "New Video",
+                    title: form.title.value || "Untitled Video",
                     url: finalUrl,
-                    isEmbed: true,
-                    category: e.target.category.value,
+                    isEmbed: isEmbed,
+                    category: form.category.value,
                     uploader: currentUser.uid.slice(0,5),
                     thumbnail: `https://picsum.photos/seed/${Math.random()}/800/450`,
                     views: 0,
                     createdAt: new Date().toISOString()
                 });
+                
+                showStatus("Published Successfully!");
                 toggleModal(false);
-                e.target.reset();
+                form.reset();
+                document.getElementById('fileNameDisplay').innerText = "No file chosen";
+            } catch (err) {
+                console.error("Upload failed:", err);
+                showStatus("Failed to save. Try again.");
             } finally {
                 btn.disabled = false;
-                btn.innerText = "Publish Content";
+                btn.innerText = originalText;
             }
         };
 
+        function showStatus(msg) {
+            const toast = document.getElementById('toast');
+            toast.innerText = msg;
+            toast.style.transform = 'translateY(0)';
+            setTimeout(() => {
+                toast.style.transform = 'translateY(200%)';
+            }, 3000);
+        }
+
         window.toggleModal = (show) => {
-            document.getElementById('modal').style.display = show ? 'flex' : 'none';
+            const m = document.getElementById('modal');
+            m.style.display = show ? 'flex' : 'none';
             document.body.style.overflow = show ? 'hidden' : 'auto';
         };
 
-        window.seedVids = async () => {
+        window.updateFileName = (input) => {
+            const display = document.getElementById('fileNameDisplay');
+            if (input.files.length > 0) {
+                display.innerText = input.files[0].name;
+                document.getElementById('urlInput').disabled = true;
+                document.getElementById('urlInput').placeholder = "File selected - Link disabled";
+            } else {
+                display.innerText = "No file chosen";
+                document.getElementById('urlInput').disabled = false;
+                document.getElementById('urlInput').placeholder = "Paste link or embed code...";
+            }
+        };
+
+        window.seedVids = async (btn) => {
+            if (!currentUser) return;
+            const original = btn.innerHTML;
+            btn.innerHTML = "Adding...";
+            
             const requested = [
                 { title: "Exclusive 10674", url: "https://hornyfans.to/embed/10674" },
                 { title: "Special 2441", url: "https://hornyfans.to/embed/2441" }
             ];
-            for (const v of requested) {
-                await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'videos'), {
-                    ...v, category: "Tech", isEmbed: true, uploader: "Admin", views: 0,
-                    thumbnail: `https://picsum.photos/seed/${Math.random()}/800/450`,
-                    createdAt: new Date().toISOString()
-                });
+            
+            try {
+                for (const v of requested) {
+                    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'videos'), {
+                        ...v, category: "Tech", isEmbed: true, uploader: "Admin", views: 0,
+                        thumbnail: `https://picsum.photos/seed/${Math.random()}/800/450`,
+                        createdAt: new Date().toISOString()
+                    });
+                }
+                showStatus("Added successfully!");
+            } catch(e) {
+                showStatus("Error seeding videos.");
+            } finally {
+                btn.innerHTML = original;
             }
         };
     </script>
     <style>
-        body { background: #0a0a0c; color: white; -webkit-tap-highlight-color: transparent; }
+        body { background: #070708; color: white; -webkit-tap-highlight-color: transparent; }
         .no-scrollbar::-webkit-scrollbar { display: none; }
         #modal { display: none; }
-        input, select { font-size: 16px !important; } /* Prevents iOS zoom on focus */
+        input, select { font-size: 16px !important; } 
+        #toast { 
+            position: fixed; bottom: 20px; left: 20px; right: 20px; 
+            background: #4f46e5; padding: 12px; border-radius: 12px;
+            text-align: center; font-weight: bold; font-size: 14px;
+            transition: transform 0.3s ease; transform: translateY(200%);
+            z-index: 1000; box-shadow: 0 10px 20px rgba(0,0,0,0.5);
+        }
     </style>
 </head>
-<body class="p-0 m-0">
+<body class="p-0 m-0 text-white font-sans">
 
-    <nav class="sticky top-0 z-40 bg-[#0a0a0c]/80 backdrop-blur-lg border-b border-white/5 p-4 flex justify-between items-center">
+    <div id="toast">Status Message</div>
+
+    <nav class="sticky top-0 z-40 bg-[#070708]/80 backdrop-blur-xl border-b border-white/5 p-4 flex justify-between items-center">
         <div class="flex items-center gap-2" onclick="goHome()">
-            <div class="bg-indigo-600 p-2 rounded-lg"><i data-lucide="play" fill="white" class="w-4 h-4"></i></div>
-            <span class="font-bold tracking-tighter">V-STREAM</span>
+            <div class="bg-indigo-600 p-2 rounded-xl"><i data-lucide="play" fill="white" class="w-4 h-4 text-white"></i></div>
+            <span class="font-bold tracking-tighter text-lg">V-STREAM</span>
         </div>
         <div class="flex items-center gap-3">
-            <button onclick="toggleModal(true)" class="bg-indigo-600 px-4 py-2 rounded-full text-xs font-bold">Upload</button>
-            <div id="userAvatar" class="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-xs font-bold border border-white/10">?</div>
+            <button onclick="toggleModal(true)" class="bg-indigo-600 px-5 py-2 rounded-full text-xs font-bold text-white shadow-lg shadow-indigo-600/20 active:scale-95 transition-transform">Upload</button>
+            <div id="userAvatar" class="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-[10px] font-bold border border-white/10 text-gray-400">?</div>
         </div>
     </nav>
 
-    <main class="p-4">
+    <main class="p-4 pb-20">
         <div id="homeView">
-            <div class="flex gap-2 overflow-x-auto no-scrollbar mb-4">
-                <button onclick="setCategory('All')" class="cat-btn bg-indigo-600 text-white px-4 py-1.5 rounded-full text-xs font-bold">All</button>
-                <button onclick="setCategory('Tech')" class="cat-btn bg-white/5 text-gray-400 px-4 py-1.5 rounded-full text-xs font-bold">Tech</button>
-                <button onclick="setCategory('Gaming')" class="cat-btn bg-white/5 text-gray-400 px-4 py-1.5 rounded-full text-xs font-bold">Gaming</button>
-                <button onclick="setCategory('Music')" class="cat-btn bg-white/5 text-gray-400 px-4 py-1.5 rounded-full text-xs font-bold">Music</button>
+            <div class="flex gap-2 overflow-x-auto no-scrollbar mb-6">
+                <button onclick="setCategory(event, 'All')" class="cat-btn bg-indigo-600 text-white px-5 py-2 rounded-full text-xs font-bold transition-all">All</button>
+                <button onclick="setCategory(event, 'Tech')" class="cat-btn bg-white/5 text-gray-400 px-5 py-2 rounded-full text-xs font-bold transition-all">Tech</button>
+                <button onclick="setCategory(event, 'Gaming')" class="cat-btn bg-white/5 text-gray-400 px-5 py-2 rounded-full text-xs font-bold transition-all">Gaming</button>
+                <button onclick="setCategory(event, 'Music')" class="cat-btn bg-white/5 text-gray-400 px-5 py-2 rounded-full text-xs font-bold transition-all">Music</button>
             </div>
             
-            <button onclick="seedVids()" class="w-full mb-4 bg-white/5 border border-white/5 p-3 rounded-xl text-xs text-indigo-400 font-bold flex items-center justify-center gap-2">
-                <i data-lucide="sparkles" class="w-4 h-4"></i> Add Your Embeds
+            <button onclick="seedVids(this)" class="w-full mb-6 bg-white/5 border border-white/5 p-4 rounded-2xl text-xs text-indigo-400 font-bold flex items-center justify-center gap-2 active:bg-white/10 transition-colors">
+                <i data-lucide="sparkles" class="w-4 h-4"></i> Add Requested Embeds
             </button>
 
-            <div id="videoGrid" class="grid grid-cols-1 gap-4"></div>
+            <div id="videoGrid" class="grid grid-cols-1 gap-6">
+                <div class="py-20 text-center text-gray-700 animate-pulse text-sm">Loading Content...</div>
+            </div>
         </div>
 
         <div id="playerView" class="hidden">
-            <button onclick="goHome()" class="flex items-center gap-1 text-gray-400 text-sm mb-4"><i data-lucide="chevron-left"></i> Back</button>
-            <div id="playerContainer" class="aspect-video bg-black rounded-2xl overflow-hidden mb-4 shadow-xl"></div>
-            <h1 id="pTitle" class="text-xl font-bold">Title</h1>
+            <button onclick="goHome()" class="flex items-center gap-1 text-gray-400 text-sm mb-4 bg-white/5 px-3 py-1.5 rounded-lg active:bg-white/10"><i data-lucide="chevron-left" class="w-4 h-4"></i> Back</button>
+            <div id="playerContainer" class="aspect-video bg-black rounded-3xl overflow-hidden mb-4 shadow-2xl border border-white/5"></div>
+            <h1 id="pTitle" class="text-xl font-bold px-1">Title</h1>
         </div>
     </main>
 
-    <!-- Simple Mobile-Ready Modal -->
-    <div id="modal" class="fixed inset-0 z-50 bg-black/95 flex flex-col p-6">
-        <div class="flex justify-between items-center mb-8">
-            <h2 class="text-2xl font-bold">Upload</h2>
-            <button onclick="toggleModal(false)"><i data-lucide="x"></i></button>
+    <div id="modal" class="fixed inset-0 z-50 bg-black/95 flex flex-col p-6 animate-in fade-in duration-300">
+        <div class="flex justify-between items-center mb-10 mt-4">
+            <h2 class="text-3xl font-bold tracking-tight">Post Video</h2>
+            <button onclick="toggleModal(false)" class="p-2 bg-white/5 rounded-full"><i data-lucide="x"></i></button>
         </div>
         
-        <form onsubmit="handleUpload(event)" class="space-y-6 overflow-y-auto flex-1">
-            <div>
-                <label class="block text-[10px] font-bold text-gray-500 uppercase mb-2">Video Embed Code or Link</label>
-                <input name="url" required placeholder="Paste iframe or link here..." class="w-full bg-white/5 border border-white/10 p-4 rounded-xl outline-none focus:border-indigo-500">
+        <form onsubmit="handleUpload(event)" class="space-y-6 overflow-y-auto flex-1 pb-10">
+            <!-- New: File Upload Section -->
+            <div class="space-y-2">
+                <label class="block text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Upload from Device</label>
+                <div class="relative">
+                    <input type="file" id="fileUpload" accept="video/*" onchange="updateFileName(this)" class="hidden">
+                    <label for="fileUpload" class="w-full bg-indigo-600/10 border border-indigo-500/30 p-5 rounded-2xl flex items-center justify-center gap-2 text-indigo-400 font-bold text-sm active:bg-indigo-600/20 transition-all cursor-pointer">
+                        <i data-lucide="upload-cloud" class="w-5 h-5"></i>
+                        Select Video File
+                    </label>
+                    <p id="fileNameDisplay" class="text-[10px] text-center mt-2 text-gray-400 italic">No file chosen</p>
+                </div>
             </div>
-            <div>
-                <label class="block text-[10px] font-bold text-gray-500 uppercase mb-2">Title</label>
-                <input name="title" required placeholder="Video title" class="w-full bg-white/5 border border-white/10 p-4 rounded-xl outline-none focus:border-indigo-500">
+
+            <div class="relative flex items-center py-2">
+                <div class="flex-grow border-t border-white/10"></div>
+                <span class="flex-shrink mx-4 text-gray-600 text-[10px] font-bold uppercase">OR</span>
+                <div class="flex-grow border-t border-white/10"></div>
             </div>
-            <div>
-                <label class="block text-[10px] font-bold text-gray-500 uppercase mb-2">Category</label>
-                <select name="category" class="w-full bg-white/5 border border-white/10 p-4 rounded-xl outline-none appearance-none">
+
+            <div class="space-y-2">
+                <label class="block text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Link or Iframe</label>
+                <input id="urlInput" name="url" placeholder="Paste link or embed code..." class="w-full bg-white/5 border border-white/10 p-5 rounded-2xl outline-none focus:border-indigo-500 text-white transition-all">
+            </div>
+
+            <div class="space-y-2">
+                <label class="block text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Title</label>
+                <input name="title" required placeholder="Enter video title" class="w-full bg-white/5 border border-white/10 p-5 rounded-2xl outline-none focus:border-indigo-500 text-white transition-all">
+            </div>
+
+            <div class="space-y-2">
+                <label class="block text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Category</label>
+                <select name="category" class="w-full bg-white/5 border border-white/10 p-5 rounded-2xl outline-none appearance-none text-white transition-all">
                     <option value="Tech">Tech</option>
                     <option value="Gaming">Gaming</option>
                     <option value="Music">Music</option>
                 </select>
             </div>
-            <button type="submit" class="w-full bg-indigo-600 py-4 rounded-xl font-bold shadow-lg shadow-indigo-600/20">Publish Content</button>
+
+            <div class="pt-4">
+                <button type="submit" class="w-full bg-indigo-600 py-5 rounded-2xl font-bold shadow-xl shadow-indigo-600/20 text-white active:scale-95 transition-transform text-base">Publish Content</button>
+            </div>
         </form>
     </div>
 
