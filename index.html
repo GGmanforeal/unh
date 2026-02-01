@@ -2,52 +2,36 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>V-STREAM | Video Platform</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>V-STREAM | Mobile</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
-    <!-- Firebase SDKs -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, doc, addDoc, onSnapshot, updateDoc, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, collection, doc, addDoc, onSnapshot, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // --- Configuration & Global State ---
         const firebaseConfig = JSON.parse(__firebase_config);
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'stream-simple-html';
-        const CATEGORIES = ["All", "Tech", "Gaming", "Music", "Design"];
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'stream-mobile-v1';
         
         let currentUser = null;
         let videos = [];
         let activeCategory = "All";
-        let selectedFile = null;
 
-        // --- DOM Elements ---
-        const videoGrid = document.getElementById('videoGrid');
-        const categoryList = document.getElementById('categoryList');
-        const uploadModal = document.getElementById('uploadModal');
-        const homeView = document.getElementById('homeView');
-        const playerView = document.getElementById('playerView');
-        const progressBar = document.getElementById('progressBar');
-        const progressContainer = document.getElementById('progressContainer');
-        const fileInput = document.getElementById('fileInput');
-        const fileNameDisplay = document.getElementById('fileNameDisplay');
-        const linkInputContainer = document.getElementById('linkInputContainer');
-
-        // --- Initialization ---
         window.onload = async () => {
             lucide.createIcons();
-            initCategories();
             
-            // Auth Flow
-            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                await signInWithCustomToken(auth, __initial_auth_token);
-            } else {
-                await signInAnonymously(auth);
-            }
+            // Auth with retry logic for mobile networks
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (e) { console.error("Auth failed", e); }
 
             onAuthStateChanged(auth, (user) => {
                 currentUser = user;
@@ -58,294 +42,182 @@
             });
         };
 
-        function initCategories() {
-            categoryList.innerHTML = CATEGORIES.map(c => `
-                <button onclick="window.setCategory('${c}')" id="cat-${c}" class="category-btn px-4 py-1.5 rounded-full text-sm whitespace-nowrap transition-all ${c === 'All' ? 'bg-indigo-600 shadow-lg shadow-indigo-600/20' : 'bg-white/5 hover:bg-white/10 text-gray-400'}">
-                    ${c}
-                </button>
-            `).join('');
-        }
-
-        window.setCategory = (category) => {
-            activeCategory = category;
-            document.querySelectorAll('.category-btn').forEach(btn => {
-                btn.classList.remove('bg-indigo-600', 'shadow-lg', 'shadow-indigo-600/20');
-                btn.classList.add('bg-white/5', 'text-gray-400');
-            });
-            const activeBtn = document.getElementById(`cat-${category}`);
-            activeBtn.classList.remove('bg-white/5', 'text-gray-400');
-            activeBtn.classList.add('bg-indigo-600', 'shadow-lg', 'shadow-indigo-600/20');
-            renderVideos();
-        };
-
         function subscribeToVideos() {
             const vCol = collection(db, 'artifacts', appId, 'public', 'data', 'videos');
             onSnapshot(vCol, (snapshot) => {
                 videos = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
                 renderVideos();
-            }, (err) => console.error("Firestore Error:", err));
+            });
         }
 
-        function renderVideos() {
-            const filtered = videos.filter(v => activeCategory === 'All' || v.category === activeCategory);
-            if (filtered.length === 0) {
-                videoGrid.innerHTML = `
-                    <div class="col-span-full py-20 text-center text-gray-500">
-                        <i data-lucide="play" class="mx-auto mb-4 opacity-10 w-12 h-12"></i>
-                        <p>No videos found in this category.</p>
-                    </div>`;
-                lucide.createIcons();
-                return;
-            }
+        window.setCategory = (cat) => {
+            activeCategory = cat;
+            document.querySelectorAll('.cat-btn').forEach(b => {
+                b.classList.remove('bg-indigo-600', 'text-white');
+                b.classList.add('bg-white/5', 'text-gray-400');
+            });
+            event.target.classList.add('bg-indigo-600', 'text-white');
+            renderVideos();
+        };
 
-            videoGrid.innerHTML = filtered.map(v => `
-                <div onclick="window.playVideo('${v.id}')" class="cursor-pointer group">
-                    <div class="relative aspect-video rounded-xl overflow-hidden mb-3 bg-white/5 border border-white/5">
-                        <img src="${v.thumbnail}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" onerror="this.src='https://picsum.photos/800/450'">
-                        <div class="absolute inset-0 bg-black/20 group-hover:bg-black/0 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100">
-                            <div class="bg-white/20 backdrop-blur-md p-3 rounded-full text-white">
-                                <i data-lucide="play" fill="white" size="24"></i>
-                            </div>
+        function renderVideos() {
+            const grid = document.getElementById('videoGrid');
+            const filtered = videos.filter(v => activeCategory === "All" || v.category === activeCategory);
+            
+            grid.innerHTML = filtered.map(v => `
+                <div onclick="window.playVideo('${v.id}')" class="bg-white/5 rounded-2xl overflow-hidden active:scale-[0.98] transition-transform">
+                    <div class="aspect-video relative">
+                        <img src="${v.thumbnail}" class="w-full h-full object-cover">
+                        <div class="absolute inset-0 flex items-center justify-center">
+                            <div class="bg-black/40 backdrop-blur-sm p-3 rounded-full"><i data-lucide="play" fill="white" class="text-white w-6 h-6"></i></div>
                         </div>
                     </div>
-                    <h3 class="font-bold line-clamp-2 leading-snug group-hover:text-indigo-400 transition-colors">${v.title}</h3>
-                    <div class="text-sm text-gray-500 mt-1 flex gap-2 items-center">
-                        <span>${v.uploader}</span>
-                        <span class="w-1 h-1 bg-gray-700 rounded-full"></span>
-                        <span>${v.views || 0} views</span>
+                    <div class="p-3">
+                        <h3 class="font-bold text-sm line-clamp-2">${v.title}</h3>
+                        <p class="text-xs text-gray-500 mt-1">${v.uploader} • ${v.views || 0} views</p>
                     </div>
                 </div>
             `).join('');
             lucide.createIcons();
         }
 
-        // --- Video Logic ---
         window.playVideo = (id) => {
-            const video = videos.find(v => v.id === id);
-            if (!video) return;
-
-            homeView.classList.add('hidden');
-            playerView.classList.remove('hidden');
+            const v = videos.find(x => x.id === id);
+            document.getElementById('homeView').classList.add('hidden');
+            document.getElementById('playerView').classList.remove('hidden');
+            window.scrollTo(0,0);
 
             const container = document.getElementById('playerContainer');
-            if (video.isEmbed) {
-                container.innerHTML = `<iframe src="${video.url}" class="w-full h-full border-none" allowfullscreen allow="autoplay; encrypted-media"></iframe>`;
-            } else {
-                container.innerHTML = `<video src="${video.url}" controls autoplay class="w-full h-full"></video>`;
-            }
-
-            document.getElementById('playerTitle').innerText = video.title;
-            document.getElementById('playerMeta').innerText = `${video.uploader} • ${video.views || 0} views • ${new Date(video.createdAt).toLocaleDateString()}`;
-            document.getElementById('uploaderInitial').innerText = video.uploader[0].toUpperCase();
-
-            // Increment views
-            updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'videos', id), {
-                views: (video.views || 0) + 1
-            });
+            container.innerHTML = v.isEmbed ? 
+                `<iframe src="${v.url}" class="w-full h-full" allowfullscreen></iframe>` :
+                `<video src="${v.url}" controls autoplay class="w-full h-full"></video>`;
+            
+            document.getElementById('pTitle').innerText = v.title;
+            updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'videos', id), { views: (v.views || 0) + 1 });
         };
 
         window.goHome = () => {
-            playerView.classList.add('hidden');
-            homeView.classList.remove('hidden');
+            document.getElementById('playerView').classList.add('hidden');
+            document.getElementById('homeView').classList.remove('hidden');
             document.getElementById('playerContainer').innerHTML = '';
-        };
-
-        // --- Upload Logic ---
-        window.openModal = () => uploadModal.classList.remove('hidden');
-        window.closeModal = () => {
-            uploadModal.classList.add('hidden');
-            selectedFile = null;
-            fileNameDisplay.innerText = "Select video file";
-            linkInputContainer.classList.remove('hidden');
-        };
-
-        fileInput.onchange = (e) => {
-            selectedFile = e.target.files[0];
-            if (selectedFile) {
-                fileNameDisplay.innerText = selectedFile.name;
-                linkInputContainer.classList.add('hidden');
-            }
-        };
-
-        const processUrl = (input) => {
-            const iframeMatch = input.match(/src=["'](.*?)["']/);
-            let url = iframeMatch ? iframeMatch[1] : input.trim();
-            if (url.includes('youtube.com/watch?v=')) url = url.replace('watch?v=', 'embed/');
-            else if (url.includes('youtu.be/')) url = url.replace('youtu.be/', 'youtube.com/embed/');
-            return url;
         };
 
         window.handleUpload = async (e) => {
             e.preventDefault();
-            const form = e.target;
-            const title = form.title.value;
-            const category = form.category.value;
-            const rawUrl = form.url ? form.url.value : "";
-            
-            const finalUrl = selectedFile ? URL.createObjectURL(selectedFile) : processUrl(rawUrl);
-            const isEmbed = !selectedFile && (finalUrl.includes('embed') || finalUrl.includes('player.'));
+            const btn = e.target.querySelector('button[type="submit"]');
+            btn.disabled = true;
+            btn.innerText = "Publishing...";
 
-            progressContainer.classList.remove('hidden');
-            let p = 0;
-            const interval = setInterval(() => {
-                p += 10;
-                progressBar.style.width = p + '%';
-                if (p >= 90) clearInterval(interval);
-            }, 100);
+            const urlInput = e.target.url.value;
+            const iframeMatch = urlInput.match(/src=["'](.*?)["']/);
+            let finalUrl = iframeMatch ? iframeMatch[1] : urlInput;
 
             try {
                 await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'videos'), {
-                    title: title || 'Untitled Video',
-                    category,
+                    title: e.target.title.value || "New Video",
                     url: finalUrl,
-                    isEmbed,
+                    isEmbed: true,
+                    category: e.target.category.value,
+                    uploader: currentUser.uid.slice(0,5),
                     thumbnail: `https://picsum.photos/seed/${Math.random()}/800/450`,
-                    uploader: currentUser.uid.slice(0, 5),
                     views: 0,
                     createdAt: new Date().toISOString()
                 });
-                clearInterval(interval);
-                progressBar.style.width = '100%';
-                setTimeout(() => {
-                    form.reset();
-                    closeModal();
-                    progressContainer.classList.add('hidden');
-                    progressBar.style.width = '0%';
-                }, 500);
-            } catch (err) {
-                console.error(err);
+                toggleModal(false);
+                e.target.reset();
+            } finally {
+                btn.disabled = false;
+                btn.innerText = "Publish Content";
             }
+        };
+
+        window.toggleModal = (show) => {
+            document.getElementById('modal').style.display = show ? 'flex' : 'none';
+            document.body.style.overflow = show ? 'hidden' : 'auto';
         };
 
         window.seedVids = async () => {
             const requested = [
-                { title: "Exclusive Feature 10674", url: "https://hornyfans.to/embed/10674" },
-                { title: "Special Content 2441", url: "https://hornyfans.to/embed/2441" }
+                { title: "Exclusive 10674", url: "https://hornyfans.to/embed/10674" },
+                { title: "Special 2441", url: "https://hornyfans.to/embed/2441" }
             ];
             for (const v of requested) {
                 await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'videos'), {
-                    ...v,
-                    category: "Tech",
-                    isEmbed: true,
-                    thumbnail: `https://picsum.photos/seed/${v.url.split('/').pop()}/800/450`,
-                    uploader: "Admin",
-                    views: Math.floor(Math.random() * 500),
+                    ...v, category: "Tech", isEmbed: true, uploader: "Admin", views: 0,
+                    thumbnail: `https://picsum.photos/seed/${Math.random()}/800/450`,
                     createdAt: new Date().toISOString()
                 });
             }
         };
     </script>
-
     <style>
-        body { background-color: #0f0f12; color: white; }
+        body { background: #0a0a0c; color: white; -webkit-tap-highlight-color: transparent; }
         .no-scrollbar::-webkit-scrollbar { display: none; }
-        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-        iframe, video { border-radius: 1.5rem; }
+        #modal { display: none; }
+        input, select { font-size: 16px !important; } /* Prevents iOS zoom on focus */
     </style>
 </head>
-<body class="font-sans antialiased selection:bg-indigo-500/30">
+<body class="p-0 m-0">
 
-    <!-- Header -->
-    <nav class="sticky top-0 z-50 bg-[#0f0f12]/90 backdrop-blur-md border-b border-white/5 px-6 py-4 flex justify-between items-center">
-        <div class="flex items-center gap-2 cursor-pointer" onclick="goHome()">
-            <div class="bg-indigo-600 p-2 rounded-lg text-white">
-                <i data-lucide="play" fill="white" size="20"></i>
-            </div>
-            <span class="font-bold text-xl tracking-tighter uppercase">V-STREAM</span>
+    <nav class="sticky top-0 z-40 bg-[#0a0a0c]/80 backdrop-blur-lg border-b border-white/5 p-4 flex justify-between items-center">
+        <div class="flex items-center gap-2" onclick="goHome()">
+            <div class="bg-indigo-600 p-2 rounded-lg"><i data-lucide="play" fill="white" class="w-4 h-4"></i></div>
+            <span class="font-bold tracking-tighter">V-STREAM</span>
         </div>
-        
-        <div class="flex items-center gap-4">
-            <button onclick="seedVids()" class="hidden sm:flex text-indigo-400 hover:text-indigo-300 text-xs font-bold items-center gap-1 transition-colors mr-2">
-                <i data-lucide="sparkles" size="14"></i> Add Requested Vids
-            </button>
-            <button onclick="openModal()" class="bg-white/5 hover:bg-white/10 px-4 py-2 rounded-full text-sm font-medium transition-all flex items-center gap-2">
-                <i data-lucide="upload" size="16"></i> Upload
-            </button>
-            <div id="userAvatar" class="w-8 h-8 rounded-full bg-indigo-500 flex items-center justify-center text-xs font-bold uppercase ring-2 ring-white/10">
-                ?
-            </div>
+        <div class="flex items-center gap-3">
+            <button onclick="toggleModal(true)" class="bg-indigo-600 px-4 py-2 rounded-full text-xs font-bold">Upload</button>
+            <div id="userAvatar" class="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-xs font-bold border border-white/10">?</div>
         </div>
     </nav>
 
-    <main class="max-w-7xl mx-auto p-6">
-        <!-- Home View -->
+    <main class="p-4">
         <div id="homeView">
-            <div id="categoryList" class="flex gap-2 overflow-x-auto pb-6 no-scrollbar">
-                <!-- Categories inject here -->
+            <div class="flex gap-2 overflow-x-auto no-scrollbar mb-4">
+                <button onclick="setCategory('All')" class="cat-btn bg-indigo-600 text-white px-4 py-1.5 rounded-full text-xs font-bold">All</button>
+                <button onclick="setCategory('Tech')" class="cat-btn bg-white/5 text-gray-400 px-4 py-1.5 rounded-full text-xs font-bold">Tech</button>
+                <button onclick="setCategory('Gaming')" class="cat-btn bg-white/5 text-gray-400 px-4 py-1.5 rounded-full text-xs font-bold">Gaming</button>
+                <button onclick="setCategory('Music')" class="cat-btn bg-white/5 text-gray-400 px-4 py-1.5 rounded-full text-xs font-bold">Music</button>
             </div>
-            <div id="videoGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                <!-- Videos inject here -->
-            </div>
+            
+            <button onclick="seedVids()" class="w-full mb-4 bg-white/5 border border-white/5 p-3 rounded-xl text-xs text-indigo-400 font-bold flex items-center justify-center gap-2">
+                <i data-lucide="sparkles" class="w-4 h-4"></i> Add Your Embeds
+            </button>
+
+            <div id="videoGrid" class="grid grid-cols-1 gap-4"></div>
         </div>
 
-        <!-- Player View -->
-        <div id="playerView" class="hidden max-w-5xl mx-auto">
-            <button onclick="goHome()" class="mb-6 flex items-center gap-2 text-gray-400 hover:text-white transition-colors">
-                <i data-lucide="chevron-left" size="20"></i> Back to Gallery
-            </button>
-            <div id="playerContainer" class="aspect-video bg-black rounded-3xl overflow-hidden mb-6 shadow-2xl ring-1 ring-white/5">
-                <!-- Player injects here -->
-            </div>
-            <h1 id="playerTitle" class="text-3xl font-bold mb-2">Video Title</h1>
-            <div class="flex justify-between items-center py-4 border-t border-white/5">
-                <div class="flex items-center gap-3">
-                    <div id="uploaderInitial" class="w-10 h-10 rounded-full bg-indigo-600 flex items-center justify-center font-bold">A</div>
-                    <div>
-                        <p id="playerUploader" class="font-bold">Uploader</p>
-                        <p id="playerMeta" class="text-xs text-gray-500">0 views</p>
-                    </div>
-                </div>
-            </div>
+        <div id="playerView" class="hidden">
+            <button onclick="goHome()" class="flex items-center gap-1 text-gray-400 text-sm mb-4"><i data-lucide="chevron-left"></i> Back</button>
+            <div id="playerContainer" class="aspect-video bg-black rounded-2xl overflow-hidden mb-4 shadow-xl"></div>
+            <h1 id="pTitle" class="text-xl font-bold">Title</h1>
         </div>
     </main>
 
-    <!-- Upload Modal -->
-    <div id="uploadModal" class="hidden fixed inset-0 z-[100] bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
-        <form onsubmit="handleUpload(event)" class="bg-[#1a1a1e] w-full max-w-md rounded-3xl p-8 border border-white/10 my-auto shadow-2xl">
-            <div class="flex justify-between items-center mb-6">
-                <h2 class="text-xl font-bold">Upload Content</h2>
-                <button type="button" onclick="closeModal()" class="hover:text-red-400 transition-colors"><i data-lucide="x"></i></button>
+    <!-- Simple Mobile-Ready Modal -->
+    <div id="modal" class="fixed inset-0 z-50 bg-black/95 flex flex-col p-6">
+        <div class="flex justify-between items-center mb-8">
+            <h2 class="text-2xl font-bold">Upload</h2>
+            <button onclick="toggleModal(false)"><i data-lucide="x"></i></button>
+        </div>
+        
+        <form onsubmit="handleUpload(event)" class="space-y-6 overflow-y-auto flex-1">
+            <div>
+                <label class="block text-[10px] font-bold text-gray-500 uppercase mb-2">Video Embed Code or Link</label>
+                <input name="url" required placeholder="Paste iframe or link here..." class="w-full bg-white/5 border border-white/10 p-4 rounded-xl outline-none focus:border-indigo-500">
             </div>
-
-            <div class="space-y-4">
-                <div onclick="document.getElementById('fileInput').click()" 
-                    class="border-2 border-dashed border-white/10 hover:border-indigo-500/50 hover:bg-white/5 rounded-2xl p-8 flex flex-col items-center gap-2 cursor-pointer transition-all">
-                    <i data-lucide="file-video" class="text-gray-500" size="32"></i>
-                    <span id="fileNameDisplay" class="text-sm font-medium text-center truncate w-full px-4 text-gray-400">Select video file</span>
-                    <input type="file" id="fileInput" accept="video/*" class="hidden">
-                </div>
-
-                <div id="linkInputContainer" class="space-y-1">
-                    <label class="text-[10px] uppercase font-bold text-gray-500 ml-1">Link or Embed Tag</label>
-                    <input name="url" placeholder="Paste link or <iframe> tag..." class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm outline-none focus:border-indigo-500 transition-colors">
-                </div>
-                
-                <div class="space-y-1">
-                    <label class="text-[10px] uppercase font-bold text-gray-500 ml-1">Title</label>
-                    <input name="title" placeholder="Catchy title..." class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm outline-none focus:border-indigo-500 transition-colors">
-                </div>
-                
-                <div class="space-y-1">
-                    <label class="text-[10px] uppercase font-bold text-gray-500 ml-1">Category</label>
-                    <select name="category" class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm outline-none focus:border-indigo-500 appearance-none">
-                        <option value="Tech">Tech</option>
-                        <option value="Gaming">Gaming</option>
-                        <option value="Music">Music</option>
-                        <option value="Design">Design</option>
-                    </select>
-                </div>
-
-                <div id="progressContainer" class="hidden space-y-2">
-                    <div class="h-1 bg-white/5 rounded-full overflow-hidden">
-                        <div id="progressBar" class="h-full bg-indigo-600 transition-all w-0"></div>
-                    </div>
-                    <p class="text-[10px] text-center text-indigo-400 font-bold uppercase tracking-widest">Processing...</p>
-                </div>
-
-                <button type="submit" class="w-full bg-indigo-600 py-4 rounded-xl font-bold hover:bg-indigo-500 transition-all shadow-lg shadow-indigo-600/20 mt-4 active:scale-[0.98]">
-                    Publish Content
-                </button>
+            <div>
+                <label class="block text-[10px] font-bold text-gray-500 uppercase mb-2">Title</label>
+                <input name="title" required placeholder="Video title" class="w-full bg-white/5 border border-white/10 p-4 rounded-xl outline-none focus:border-indigo-500">
             </div>
+            <div>
+                <label class="block text-[10px] font-bold text-gray-500 uppercase mb-2">Category</label>
+                <select name="category" class="w-full bg-white/5 border border-white/10 p-4 rounded-xl outline-none appearance-none">
+                    <option value="Tech">Tech</option>
+                    <option value="Gaming">Gaming</option>
+                    <option value="Music">Music</option>
+                </select>
+            </div>
+            <button type="submit" class="w-full bg-indigo-600 py-4 rounded-xl font-bold shadow-lg shadow-indigo-600/20">Publish Content</button>
         </form>
     </div>
 
